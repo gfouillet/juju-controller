@@ -85,6 +85,7 @@ class TestCharm(unittest.TestCase):
         harness = Harness(JujuControllerCharm)
         self.addCleanup(harness.cleanup)
         harness.begin()
+        harness.set_leader(True)
 
         harness.add_network(address="192.168.1.17", endpoint="metrics-endpoint")
 
@@ -112,6 +113,55 @@ class TestCharm(unittest.TestCase):
         harness.remove_relation(relation_id)
         mock_remove_user.assert_called_once_with(f'juju-metrics-r{relation_id}')
 
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("controlsocket.Client.add_metrics_user")
+    def test_metrics_endpoint_non_leader_only_sets_unit_data(
+            self, mock_add_user, mock_metrics_provider):
+        harness = Harness(JujuControllerCharm)
+        self.addCleanup(harness.cleanup)
+        harness.begin()
+
+        harness.add_relation("metrics-endpoint", "prometheus-k8s")
+
+        mock_add_user.assert_not_called()
+        mock_metrics_provider.assert_called_once_with(harness.charm, jobs=[])
+        mock_metrics_provider.return_value.set_scrape_job_spec.assert_called_once()
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password", new=lambda: "passwd")
+    @patch("controlsocket.Client.add_metrics_user")
+    @patch("controlsocket.Client.remove_metrics_user")
+    def test_metrics_relations_share_user(
+            self, mock_remove_user, mock_add_user, _mock_metrics_provider, _):
+        harness = Harness(JujuControllerCharm)
+        self.addCleanup(harness.cleanup)
+        harness.begin()
+        harness.set_leader(True)
+
+        first_id = harness.add_relation("metrics-endpoint", "prometheus-one")
+        second_id = harness.add_relation("metrics-endpoint", "prometheus-two")
+
+        # The provider publishes one scrape job to all relations, so separate
+        # Prometheus applications intentionally share one controller user.
+        username = f"juju-metrics-r{first_id}"
+        self.assertEqual(
+            harness.get_relation_data(second_id, "juju-controller"),
+            {"metrics-username": username, "metrics-password": "passwd"},
+        )
+        mock_add_user.assert_called_with(username, "passwd")
+        mock_remove_user.assert_any_call(f"juju-metrics-r{second_id}")
+
+        mock_remove_user.reset_mock()
+        harness.remove_relation(first_id)
+        self.assertNotIn(
+            username,
+            [call.args[0] for call in mock_remove_user.call_args_list],
+        )
+        mock_remove_user.reset_mock()
+        harness.remove_relation(second_id)
+        mock_remove_user.assert_any_call(username)
+
     @patch("builtins.open", new_callable=mock_open, read_data=agent_conf_apiaddresses_missing)
     def test_apiaddresses_missing(self, _):
         harness = Harness(JujuControllerCharm)
@@ -138,6 +188,7 @@ class TestCharm(unittest.TestCase):
         harness = Harness(JujuControllerCharm)
         self.addCleanup(harness.cleanup)
         harness.begin()
+        harness.set_leader(True)
 
         harness.add_relation('metrics-endpoint', 'prometheus-k8s')
         self.assertEqual(harness.charm.unit.status, BlockedStatus(
