@@ -69,6 +69,8 @@ class JujuControllerCharm(CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.collect_unit_status, self._on_collect_status)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
+        self.framework.observe(
+            self.on.leader_elected, self._on_dbcluster_leader_elected)
         self.framework.observe(self.on.leader_elected, self._on_metrics_reconcile)
         self.framework.observe(self.on.upgrade_charm, self._on_metrics_reconcile)
         self.framework.observe(
@@ -296,8 +298,16 @@ class JujuControllerCharm(CharmBase):
         self._update_bind_addresses(relation)
 
     def _on_dbcluster_relation_departed(self, event):
-        relation = event.relation
-        self._update_bind_addresses(relation)
+        # A departing unit receives this event once for each remaining peer.
+        # It must not publish an aggregate from its shrinking view of the
+        # relation.
+        if event.departing_unit == self.unit:
+            return
+        self._update_bind_addresses(event.relation)
+
+    def _on_dbcluster_leader_elected(self, _event):
+        for relation in self.model.relations["dbcluster"]:
+            self._update_bind_addresses(relation)
 
     def _on_tracing_relation_changed(self, event):
         if not self.tracing_requirer.is_ready(event.relation):
