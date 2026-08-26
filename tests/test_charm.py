@@ -316,6 +316,46 @@ class TestCharm(unittest.TestCase):
         self.assertEqual(mock_add_user.call_count, 2)
 
     @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password", new=lambda: "passwd")
+    @patch("controlsocket.ControlSocketClient.add_metrics_user")
+    @patch("controlsocket.ControlSocketClient.remove_metrics_user")
+    def test_metrics_ensure_user_reraises_non_recoverable_error(
+            self, mock_remove_user, mock_add_user, mock_metrics_provider, _):
+        harness = self.harness
+        harness.set_leader(True)
+
+        mock_add_user.side_effect = APIError(
+            {}, 403, "Forbidden", "forbidden")
+
+        with self.assertRaises(APIError):
+            harness.add_relation('metrics-endpoint', 'prometheus-k8s')
+
+        mock_remove_user.assert_not_called()
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password", new=lambda: "passwd")
+    @patch("controlsocket.ControlSocketClient.add_metrics_user")
+    @patch("controlsocket.ControlSocketClient.remove_metrics_user")
+    def test_metrics_remove_user_reraises_non_404_error(
+            self, mock_remove_user, mock_add_user, mock_metrics_provider, _):
+        harness = self.harness
+        harness.set_leader(True)
+
+        mock_add_user.side_effect = [
+            APIError({}, 409, "Conflict", "user already exists"),
+            None,
+        ]
+        mock_remove_user.side_effect = APIError(
+            {}, 500, "Internal Server Error", "server error")
+
+        with self.assertRaises(APIError):
+            harness.add_relation('metrics-endpoint', 'prometheus-k8s')
+
+        mock_remove_user.assert_called_once()
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
     @patch("controlsocket.ControlSocketClient.set_charm_tracing_config")
     def test_tracing_relation_updates_endpoints(self, mock_set_tracing_config, *_):
         harness = self.harness
