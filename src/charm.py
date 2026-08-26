@@ -7,6 +7,7 @@ import configchangesocket
 import json
 import logging
 import secrets
+import unixsocket
 import urllib.parse
 import yaml
 
@@ -202,29 +203,39 @@ class JujuControllerCharm(CharmBase):
         jobs = self._metrics_jobs(username, password)
         if jobs is None:
             return
-        if self._metrics_endpoint is None:
-            self._metrics_endpoint = MetricsEndpointProvider(self, jobs=jobs)
-            self._metrics_endpoint.set_scrape_job_spec()
-        else:
-            self._metrics_endpoint.update_scrape_job_spec(jobs)
+        try:
+            if self._metrics_endpoint is None:
+                self._metrics_endpoint = MetricsEndpointProvider(self, jobs=jobs)
+                self._metrics_endpoint.set_scrape_job_spec()
+            else:
+                self._metrics_endpoint.update_scrape_job_spec(jobs)
+        except ValueError as e:
+            logger.warning(
+                "metrics-endpoint binding not IP-resolvable yet; will retry: %s", e)
+            raise BindingPendingException() from e
 
     def _configure_metrics_as_unit(self):
         if self._metrics_endpoint is None:
             self._metrics_endpoint = MetricsEndpointProvider(self, jobs=[])
-        self._metrics_endpoint.set_scrape_job_spec()
+        try:
+            self._metrics_endpoint.set_scrape_job_spec()
+        except ValueError as e:
+            logger.warning(
+                "metrics-endpoint binding not IP-resolvable yet (unit); will retry: %s", e)
+            raise BindingPendingException() from e
 
     def _remove_metrics_user(self, username):
         try:
             self._control_socket.remove_metrics_user(username)
-        except controlsocket.APIError as e:
+        except unixsocket.APIError as e:
             if e.code != 404:
                 raise
 
     def _ensure_metrics_user(self, username, password):
         try:
             self._control_socket.add_metrics_user(username, password)
-        except controlsocket.APIError as e:
-            if e.code != 409:
+        except unixsocket.APIError as e:
+            if e.code not in (409, 500):
                 raise
             self._remove_metrics_user(username)
             self._control_socket.add_metrics_user(username, password)
@@ -255,10 +266,13 @@ class JujuControllerCharm(CharmBase):
     def _reconcile_metrics(self, relations):
         if not relations:
             return False
-        if self.unit.is_leader():
-            self._reconcile_metrics_as_leader(relations)
-        else:
-            self._configure_metrics_as_unit()
+        try:
+            if self.unit.is_leader():
+                self._reconcile_metrics_as_leader(relations)
+            else:
+                self._configure_metrics_as_unit()
+        except BindingPendingException:
+            return False
         return True
 
     def _on_metrics_endpoint_relation_created(self, event):
@@ -493,6 +507,10 @@ class ControllerProcessException(Exception):
 
 class DBBindAddressException(Exception):
     """Raised when there are errors regarding the database bind addresses"""
+
+
+class BindingPendingException(Exception):
+    """Raised when the relation network binding is not yet IP-resolvable."""
 
 
 if __name__ == "__main__":
