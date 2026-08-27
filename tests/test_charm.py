@@ -21,7 +21,8 @@ from charm import JujuControllerCharm, AgentConfException
 from ops.model import BlockedStatus, ActiveStatus
 from ops.testing import Harness
 from unittest.mock import Mock, mock_open, patch
-from unixsocket import APIError, ConnectionError as SocketConnectionError
+from controlsocket import APIError
+from unixsocket import ConnectionError as SocketConnectionError
 
 agent_conf = '''
 apiaddresses:

@@ -7,7 +7,6 @@ import configchangesocket
 import json
 import logging
 import secrets
-import unixsocket
 import urllib.parse
 import yaml
 
@@ -227,14 +226,14 @@ class JujuControllerCharm(CharmBase):
     def _remove_metrics_user(self, username):
         try:
             self._control_socket.remove_metrics_user(username)
-        except unixsocket.APIError as e:
+        except controlsocket.APIError as e:
             if e.code != 404:
                 raise
 
     def _ensure_metrics_user(self, username, password):
         try:
             self._control_socket.add_metrics_user(username, password)
-        except unixsocket.APIError as e:
+        except controlsocket.APIError as e:
             if e.code not in (409, 500):
                 raise
             self._remove_metrics_user(username)
