@@ -358,6 +358,90 @@ class TestCharm(unittest.TestCase):
         mock_remove_user.assert_called_once()
 
     @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password", new=lambda: "passwd")
+    @patch("controlsocket.ControlSocketClient.add_metrics_user")
+    @patch("controlsocket.ControlSocketClient.remove_metrics_user")
+    def test_metrics_ensure_user_retry_failure_propagates(
+            self, mock_remove_user, mock_add_user, mock_metrics_provider, _):
+        harness = self.harness
+        harness.set_leader(True)
+
+        mock_add_user.side_effect = [
+            APIError({}, 500, "Internal Server Error", "password destroyed"),
+            APIError({}, 500, "Internal Server Error", "password destroyed"),
+        ]
+
+        with self.assertRaises(APIError):
+            harness.add_relation('metrics-endpoint', 'prometheus-k8s')
+
+        self.assertEqual(mock_add_user.call_count, 2)
+        mock_remove_user.assert_called_once()
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password", new=lambda: "passwd")
+    @patch("controlsocket.ControlSocketClient.add_metrics_user")
+    def test_metrics_endpoint_redefers_until_resolved(
+            self, mock_add_user, mock_metrics_provider, _):
+        harness = self.harness
+        harness.set_leader(True)
+
+        mock_provider_instance = mock_metrics_provider.return_value
+        mock_provider_instance.set_scrape_job_spec.side_effect = ValueError(
+            "not an IPv4 or IPv6 network"
+        )
+        mock_provider_instance.update_scrape_job_spec.side_effect = ValueError(
+            "not an IPv4 or IPv6 network"
+        )
+
+        harness.add_relation('metrics-endpoint', 'prometheus-k8s')
+
+        notices = [n[0] for n in harness.framework._storage.notices("")]
+        self.assertTrue(
+            any("metrics_endpoint_relation_created" in n for n in notices)
+        )
+
+        mock_provider_instance.update_scrape_job_spec.side_effect = None
+        harness.charm._on_metrics_reconcile(None)
+        mock_provider_instance.update_scrape_job_spec.assert_called_once()
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
+    @patch("charm.MetricsEndpointProvider", autospec=True)
+    @patch("charm.generate_password")
+    @patch("controlsocket.ControlSocketClient.add_metrics_user")
+    def test_metrics_endpoint_password_stable_across_deferred_retry(
+            self, mock_add_user, mock_generate_password,
+            mock_metrics_provider, _):
+        harness = self.harness
+        harness.set_leader(True)
+
+        mock_generate_password.return_value = "first-pass"
+
+        mock_provider_instance = mock_metrics_provider.return_value
+        mock_provider_instance.set_scrape_job_spec.side_effect = ValueError(
+            "not an IPv4 or IPv6 network"
+        )
+
+        relation_id = harness.add_relation('metrics-endpoint', 'prometheus-k8s')
+
+        self.assertEqual(
+            harness.get_relation_data(relation_id, "juju-controller")["metrics-password"],
+            "first-pass",
+        )
+
+        mock_provider_instance.update_scrape_job_spec.side_effect = None
+        mock_generate_password.return_value = "second-pass"
+        harness.charm._on_metrics_reconcile(None)
+
+        self.assertEqual(
+            harness.get_relation_data(relation_id, "juju-controller")["metrics-password"],
+            "first-pass",
+        )
+        for call in mock_add_user.call_args_list:
+            self.assertEqual(call.args[1], "first-pass")
+
+    @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
     @patch("controlsocket.ControlSocketClient.set_charm_tracing_config")
     def test_tracing_relation_updates_endpoints(self, mock_set_tracing_config, *_):
         harness = self.harness

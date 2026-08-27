@@ -10,6 +10,12 @@ from configchangesocket import ConfigChangeSocketClient
 from unixsocket import APIError, ConnectionError
 
 
+class TestAPIErrorReexport(unittest.TestCase):
+    def test_controlsocket_reexports_api_error(self):
+        from controlsocket import APIError as CSAPIError
+        assert CSAPIError is APIError
+
+
 class TestClass(unittest.TestCase):
     def test_add_metrics_user_success(self):
         mock_opener = MockOpener(self)
