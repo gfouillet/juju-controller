@@ -256,6 +256,7 @@ class TestCharm(unittest.TestCase):
             "not an IPv4 or IPv6 network"
         )
         harness.charm._on_metrics_reconcile(None)
+        mock_provider_instance.update_scrape_job_spec.assert_called_once()
 
     @patch("builtins.open", new_callable=mock_open, read_data=agent_conf)
     @patch("charm.MetricsEndpointProvider", autospec=True)
